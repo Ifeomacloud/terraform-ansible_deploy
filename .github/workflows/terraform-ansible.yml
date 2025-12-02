@@ -45,7 +45,9 @@ jobs:
 
       - name: Terraform Init + Workspace Select/Create
         run: |
-          terraform init -input=false -reconfigure
+          # NOTE: Do NOT use -reconfigure for HCP/Terraform Cloud backends.
+          terraform init -input=false
+          # Select workspace or create it if missing (keeps workspace stable)
           if terraform workspace list | grep -q " ${TF_WORKSPACE}$"; then
             terraform workspace select ${TF_WORKSPACE}
           else
@@ -55,13 +57,13 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
-      - name: Terraform Plan (ignore no-change exit code)
+      - name: Terraform Plan (kept for logs; won't fail the job)
         run: terraform plan -input=false || true
 
-      - name: Terraform Apply (always runs when apply selected)
+      - name: Terraform Apply (always run when apply selected)
         if: ${{ github.event.inputs.tf_action == 'apply' || github.event_name == 'push' }}
-        run: terraform apply -input=false -auto-approve || true
+        run: terraform apply -input=false -auto-approve
 
       - name: Terraform Destroy (only manual)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'destroy' }}
-        run: terraform destroy -auto-approve || true
+        run: terraform destroy -auto-approve
