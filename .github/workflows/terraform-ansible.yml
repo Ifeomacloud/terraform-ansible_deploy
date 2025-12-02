@@ -59,12 +59,12 @@ jobs:
 
       - name: Terraform Plan
         # This step will now succeed because the token is in the environment
-        run: terraform plan  -input=false
+        run: terraform plan -out=plan.tfplan -input=false
 
       - name: Terraform Apply
         # Run on push OR when manual trigger specified 'apply'
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
-        run: terraform apply -input=false -auto-approve 
+        run: terraform apply -input=false -auto-approve plan.tfplan
 
       #- name: Terraform Destroy
         # Run on push? Probably not. Only run when manual trigger specified 'destroy'
