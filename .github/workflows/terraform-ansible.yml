@@ -3,7 +3,7 @@ name: Terraform + Ansible Deploy
 on:
   push:
     branches:
-      - main          # change to your default branch
+      - main
   workflow_dispatch:
     inputs:
       tf_action:
@@ -35,7 +35,7 @@ jobs:
 
       - name: Configure Terraform Cloud token
         env:
-          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
         run: |
           echo "Terraform Cloud token configured for remote backend/workspace."
 
@@ -47,6 +47,8 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Init
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
         run: terraform init -input=false
 
       - name: Terraform Validate
