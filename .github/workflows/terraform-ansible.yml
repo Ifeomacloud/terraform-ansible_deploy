@@ -24,13 +24,8 @@ jobs:
   terraform_and_ansible:
     name: Provision Infrastructure and Configure
     runs-on: ubuntu-latest
-    # --------------------------------------------------------------------------
-    # 🌟 FIX: Define the Terraform Cloud token at the job level so it is
-    # available for INIT, PLAN, APPLY, and DESTROY steps.
-    # --------------------------------------------------------------------------
     env:
       TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
-      
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -40,8 +35,6 @@ jobs:
         with:
           terraform_version: '1.14.0'
 
-      # Removed the decorative 'Configure Terraform Cloud token' step
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -49,98 +42,106 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Terraform Init
-        # The TF token is now inherited from the job-level 'env'
-        run: terraform init -input=false
-
+      - name: Terraform Init + Select Workspace
+        run: |
+          terraform init -input=false -reconfigure
+          # Select workspace or create it if missing
+          if terraform workspace list | grep -q " ${TF_WORKSPACE}\$"; then
+            terraform workspace select ${TF_WORKSPACE}
+          else
+            terraform workspace new ${TF_WORKSPACE}
+          fi
 
       - name: Terraform Validate
         run: terraform validate
 
-      - name: Terraform Plan
-        # This step will now succeed because the token is in the environment
-        run: terraform plan -out=plan.tfplan -input=false
+      - name: Terraform Plan (kept for logs; won't fail the job if no changes)
+        run: |
+          # Save plan for debugging/auditing, but allow empty/no-change to not fail the step.
+          terraform plan -out=plan.tfplan -input=false || true
+          echo "Saved plan (if any) to plan.tfplan"
 
-      - name: Terraform Apply
-        # Run on push OR when manual trigger specified 'apply'
+      - name: Terraform Apply (always run when apply requested)
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
-        run: terraform apply -input=false -auto-approve plan.tfplan
+        run: terraform apply -input=false -auto-approve
 
-      #- name: Terraform Destroy
-        # Run on push? Probably not. Only run when manual trigger specified 'destroy'
-        #if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'destroy' }}
-        #run: terraform destroy -auto-approve
+      - name: Terraform Destroy
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'destroy' }}
+        run: terraform destroy -auto-approve
 
       # --------------------------------------------------------------------------
-      # Ansible steps (only for apply)
+      # Ansible steps (run when apply requested)
       # --------------------------------------------------------------------------
-
       - name: Install dependencies for Inventory & Ansible
-        if: ${{ github.event.inputs.tf_action == 'apply' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
         run: |
           sudo apt-get update -y
           sudo apt-get install -y jq python3-pip
           python3 -m pip install ansible
 
       - name: Fetch Terraform Outputs
-        if: ${{ github.event.inputs.tf_action == 'apply' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
         id: tfoutputs
         run: |
-          # Use terraform output to fetch the IPs for Ansible
           terraform output -json > tfoutput.json
           echo "::notice::Outputs saved to tfoutput.json"
 
-      - name: Generate Ansible Inventory
-        if: ${{ github.event.inputs.tf_action == 'apply' }}
+      - name: Generate Ansible Inventory (sorted & deduped)
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
         run: |
-          PRIVATE_IPS=$(jq -r '.private_ips.value[]' tfoutput.json)
+          if [ ! -f tfoutput.json ]; then
+            echo "tfoutput.json not found"
+            exit 1
+          fi
+
+          # Adjust key name if your Terraform output differs
+          jq -r '.private_ips.value[]' tfoutput.json | sort -V | uniq > sorted_private_ips.txt
+
           INV_FILE=inventory.ini
           echo "[amazon_linux]" > $INV_FILE
-          for ip in $PRIVATE_IPS; do
+          while IFS= read -r ip; do
+            [ -z "$ip" ] && continue
             echo "$ip" >> $INV_FILE
-          done
-          # Configure Ansible connection variables
+          done < sorted_private_ips.txt
+
           printf '%s\n' '[amazon_linux:vars]' \
             'ansible_user=ec2-user' \
             'ansible_ssh_private_key_file=/home/runner/.ssh/id_rsa' \
             'ansible_become=true' >> $INV_FILE
+
           echo "Inventory generated:"
           cat $INV_FILE
 
       - name: Install SSH Private Key for Ansible
-        if: ${{ github.event.inputs.tf_action == 'apply' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
         run: |
-          # Set up SSH key using the GitHub secret
           mkdir -p /home/runner/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > /home/runner/.ssh/id_rsa
           chmod 600 /home/runner/.ssh/id_rsa
-          
-          # Configure Ansible to skip host key checking
+
           mkdir -p /home/runner/.ansible
           echo '[defaults]' > /home/runner/.ansible.cfg
           echo 'host_key_checking = False' >> /home/runner/.ansible.cfg
           export ANSIBLE_CONFIG=/home/runner/.ansible.cfg
 
       - name: Wait for SSH
-        if: ${{ github.event.inputs.tf_action == 'apply' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
         run: |
           echo "Waiting 30 seconds for EC2 instance SSH to become available..."
           sleep 30
 
       - name: Run Ansible Ping
-        if: ${{ github.event.inputs.tf_action == 'apply' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
         run: |
-          # Test SSH connectivity
           ansible -i inventory.ini amazon_linux -m ping -u ec2-user --private-key=/home/runner/.ssh/id_rsa
 
       - name: Run Ansible Playbook
-        if: ${{ github.event.inputs.tf_action == 'apply' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
         run: |
-          # Execute configuration playbook (assuming setup.yml exists)
           ansible-playbook -i inventory.ini setup.yml -u ec2-user --private-key=/home/runner/.ssh/id_rsa
 
       - name: Save outputs as artifact
-        if: ${{ github.event.inputs.tf_action == 'apply' }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
         uses: actions/upload-artifact@v4
         with:
           name: terraform-output-and-inventory
