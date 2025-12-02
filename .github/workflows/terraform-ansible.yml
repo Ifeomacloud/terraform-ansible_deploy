@@ -66,9 +66,9 @@ jobs:
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
         run: terraform apply -input=false -auto-approve plan.tfplan
 
-      #- name: Terraform Destroy
-        # Run on push? Probably not. Only run when manual trigger specified 'destroy'
-        #if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'destroy' }}
-        #run: terraform destroy -auto-approve
+      - name: Terraform Destroy
+        #Run on push? Probably not. Only run when manual trigger specified 'destroy'
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'destroy' }}
+        run: terraform destroy -auto-approve
 
       
