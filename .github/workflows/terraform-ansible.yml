@@ -24,6 +24,13 @@ jobs:
   terraform_and_ansible:
     name: Provision Infrastructure and Configure
     runs-on: ubuntu-latest
+    # --------------------------------------------------------------------------
+    # 🌟 FIX: Define the Terraform Cloud token at the job level so it is
+    # available for INIT, PLAN, APPLY, and DESTROY steps.
+    # --------------------------------------------------------------------------
+    env:
+      TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+      
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,11 +40,7 @@ jobs:
         with:
           terraform_version: '1.14.0'
 
-      - name: Configure Terraform Cloud token
-        env:
-          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
-        run: |
-          echo "Terraform Cloud token configured for remote backend/workspace."
+      # Removed the decorative 'Configure Terraform Cloud token' step
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -47,18 +50,15 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Init
-        env:
-          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
-        run: |
-          # Clean token (remove extra whitespace/newlines)
-          export TF_TOKEN_app_terraform_io=$(echo "$TF_TOKEN_app_terraform_io" | tr -d '\r\n')
-          terraform init -input=false
+        # The TF token is now inherited from the job-level 'env'
+        run: terraform init -input=false
 
 
       - name: Terraform Validate
         run: terraform validate
 
       - name: Terraform Plan
+        # This step will now succeed because the token is in the environment
         run: terraform plan -out=plan.tfplan -input=false
 
       - name: Terraform Apply
@@ -84,6 +84,7 @@ jobs:
         if: ${{ github.event.inputs.tf_action == 'apply' }}
         id: tfoutputs
         run: |
+          # Use terraform output to fetch the IPs for Ansible
           terraform output -json > tfoutput.json
           echo "::notice::Outputs saved to tfoutput.json"
 
@@ -96,7 +97,7 @@ jobs:
           for ip in $PRIVATE_IPS; do
             echo "$ip" >> $INV_FILE
           done
-          # Use printf to avoid heredoc issues
+          # Configure Ansible connection variables
           printf '%s\n' '[amazon_linux:vars]' \
             'ansible_user=ec2-user' \
             'ansible_ssh_private_key_file=/home/runner/.ssh/id_rsa' \
@@ -107,10 +108,12 @@ jobs:
       - name: Install SSH Private Key for Ansible
         if: ${{ github.event.inputs.tf_action == 'apply' }}
         run: |
+          # Set up SSH key using the GitHub secret
           mkdir -p /home/runner/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > /home/runner/.ssh/id_rsa
           chmod 600 /home/runner/.ssh/id_rsa
           
+          # Configure Ansible to skip host key checking
           mkdir -p /home/runner/.ansible
           echo '[defaults]' > /home/runner/.ansible.cfg
           echo 'host_key_checking = False' >> /home/runner/.ansible.cfg
@@ -125,11 +128,13 @@ jobs:
       - name: Run Ansible Ping
         if: ${{ github.event.inputs.tf_action == 'apply' }}
         run: |
+          # Test SSH connectivity
           ansible -i inventory.ini amazon_linux -m ping -u ec2-user --private-key=/home/runner/.ssh/id_rsa
 
       - name: Run Ansible Playbook
         if: ${{ github.event.inputs.tf_action == 'apply' }}
         run: |
+          # Execute configuration playbook (assuming setup.yml exists)
           ansible-playbook -i inventory.ini setup.yml -u ec2-user --private-key=/home/runner/.ssh/id_rsa
 
       - name: Save outputs as artifact
