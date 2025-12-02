@@ -49,7 +49,11 @@ jobs:
       - name: Terraform Init
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
-        run: terraform init -input=false
+        run: |
+          # Clean token (remove extra whitespace/newlines)
+          export TF_TOKEN_app_terraform_io=$(echo "$TF_TOKEN_app_terraform_io" | tr -d '\r\n')
+          terraform init -input=false
+
 
       - name: Terraform Validate
         run: terraform validate
