@@ -1,4 +1,4 @@
-name: Terraform Deploy
+name: Terraform + Ansible Deploy
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tf_action:
-        description: "Terraform action to run"
+        description: 'Terraform action to run (apply/destroy)'
         required: true
-        default: "apply"
+        default: 'apply'
         type: choice
         options:
           - apply
@@ -21,49 +21,54 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
-  terraform:
-    name: Terraform Provision
+  terraform_and_ansible:
+    name: Provision Infrastructure and Configure
     runs-on: ubuntu-latest
+    # --------------------------------------------------------------------------
+    # 🌟 FIX: Define the Terraform Cloud token at the job level so it is
+    # available for INIT, PLAN, APPLY, and DESTROY steps.
+    # --------------------------------------------------------------------------
     env:
       TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
-
+      
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Set up Terraform CLI
+        uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: "1.14.0"
+          terraform_version: '1.14.0'
 
-      - name: Configure AWS Credentials
+      # Removed the decorative 'Configure Terraform Cloud token' step
+
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Terraform Init + Workspace Select/Create
-        run: |
-          # NOTE: Do NOT use -reconfigure for HCP/Terraform Cloud backends.
-          terraform init -input=false
-          # Select workspace or create it if missing (keeps workspace stable)
-          if terraform workspace list | grep -q " ${TF_WORKSPACE}$"; then
-            terraform workspace select ${TF_WORKSPACE}
-          else
-            terraform workspace new ${TF_WORKSPACE}
-          fi
+      - name: Terraform Init
+        # The TF token is now inherited from the job-level 'env'
+        run: terraform init -input=false
+
 
       - name: Terraform Validate
         run: terraform validate
 
-      - name: Terraform Plan (kept for logs; won't fail the job)
-        run: terraform plan -input=false || true
+      - name: Terraform Plan
+        # This step will now succeed because the token is in the environment
+        run: terraform plan -out=plan.tfplan -input=false
 
-      - name: Terraform Apply (always run when apply selected)
-        if: ${{ github.event.inputs.tf_action == 'apply' || github.event_name == 'push' }}
-        run: terraform apply -input=false -auto-approve
+      - name: Terraform Apply
+        # Run on push OR when manual trigger specified 'apply'
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'apply') }}
+        run: terraform apply -input=false -auto-approve plan.tfplan
 
-      - name: Terraform Destroy (only manual)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'destroy' }}
-        run: terraform destroy -auto-approve
+      #- name: Terraform Destroy
+        # Run on push? Probably not. Only run when manual trigger specified 'destroy'
+        #if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tf_action == 'destroy' }}
+        #run: terraform destroy -auto-approve
+
+      
